@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QR Maze</title>
+  <style>
+    body {
+      background: #333;
+      margin: 0;
+      padding: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+    #shop {
+      position: fixed;
+      top: 10px;
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: center;
+      max-width: 420px;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    #shop div {
+      width: 70px;
+      height: 70px;
+      background: #777;
+      border: 3px solid #000;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      font-family: monospace;
+      font-size: 12px;
+      color: #fff;
+      cursor: pointer;
+      text-align: center;
+      padding: 5px;
+      box-sizing: border-box;
+    }
+    #shop div:hover, #shop div:active {
+      background: #aaa;
+    }
+    #shop .owned {
+      background: #0f0;
+    }
+    #shop .selected {
+      border-color: #ff0;
+    }
+    #shop div span.name {
+      font-size: 12px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    #shop div span.price {
+      font-size: 10px;
+      line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 100%;
+    }
+    canvas {
+      border: 2px solid black;
+      image-rendering: pixelated;
+      max-width: 100%;
+    }
+    #dpad {
+      position: fixed;
+      bottom: 80px;
+      display: grid;
+      grid-template-areas: 
+        "  .   up   .  "
+        "left down right";
+      gap: 10px;
+      padding: 10px;
+    }
+    #dpad button {
+      width: 50px;
+      height: 50px;
+      background: #777;
+      border: 3px solid #000;
+      font-size: 20px;
+      font-family: monospace;
+      color: #fff;
+      cursor: pointer;
+      touch-action: manipulation;
+      transition: transform 0.1s;
+    }
+    #dpad button:active {
+      background: #aaa;
+      transform: scale(0.95);
+    }
+    #up { grid-area: up; }
+    #down { grid-area: down; }
+    #left { grid-area: left; }
+    #right { grid-area: right; }
+    #ad-banner {
+      position: fixed;
+      bottom: 10px;
+      text-align: center;
+      width: 100%;
+    }
+    @media (max-width: 400px) {
+      canvas { width: 300px; height: 300px; }
+      #dpad button { width: 40px; height: 40px; }
+      #shop div { width: 60px; height: 60px; }
+    }
+  </style>
+</head>
+<body>
+  <div id="shop"></div>
+  <canvas id="gameCanvas" width="320" height="320"></canvas>
+  <div id="dpad">
+    <button id="up">↑</button>
+    <button id="down">↓</button>
+    <button id="left">←</button>
+    <button id="right">→</button>
+  </div>
+  <div id="ad-banner">
+    <!-- Google AdSense Banner (320x50) -->
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-XXXX" crossorigin="anonymous"></script>
+    <ins class="adsbygoogle"
+         style="display:inline-block;width:320px;height:50px"
+         data-ad-client="ca-pub-XXXX"
+         data-ad-slot="YYYY"></ins>
+    <script>
+      (adsbygoogle = window.adsbygoogle || []).push({});
+    </script>
+  </div>
+
+  <script>
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingEnabled = false;
+
+    const TILE_SIZE = 16;
+    const GRID_WIDTH = 20;
+    const GRID_HEIGHT = 20;
+
+    let player = { 
+      x: 1, 
+      y: 1, 
+      hasKey: false, 
+      coins: 0, 
+      character: "red" 
+    };
+    let key = { x: 10, y: 10 };
+    let chest = { x: 18, y: 18, isOpen: false, isPurple: false, isLightBlue: false, coinReward: 1 };
+    let grid = [];
+    let ownedCharacters = ["red"];
+    let rotationAngle = 0;
+    let flashVisible = true;
+    let skullEyesVisible = true;
+    let coinAnimation = { text: "", x: 0, y: 0, alpha: 0, timer: 0 };
+
+    const shopItems = [
+      { name: "Red", cost: 0, type: "square", color: "#f00" },      // Row 1
+      { name: "Blue", cost: 10, type: "square", color: "#00f" },
+      { name: "Green", cost: 20, type: "square", color: "#0f0" },
+      { name: "Flash", cost: 50, type: "flash", color: "#808080" },
+      { name: "Skull", cost: 100, type: "skull", color: "#fff" },
+      { name: "Star", cost: 999, type: "star", color: "rainbow" },  // Row 2, left (renamed from Rainbow Star)
+      { name: "SOL", cost: 100000, type: "sun", color: "#ff0" }     // Row 2, right
+    ];
+
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    function playMoveSound() {
+      const osc = audioCtx.createOscillator();
+      osc.type = "triangle";
+      osc.frequency.value = 1200 + Math.random() * 200;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.08;
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.04);
+    }
+
+    function playChestSound() {
+      const osc = audioCtx.createOscillator();
+      osc.type = "sine";
+      osc.frequency.value = 1500;
+      const gain = audioCtx.createGain();
+      gain.gain.value = 0.2;
+      gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start();
+      osc.stop(audioCtx.currentTime + 0.2);
+    }
+
+    function initializeGrid() {
+      grid = Array(GRID_HEIGHT).fill().map(() => Array(GRID_WIDTH).fill(1));
+    }
+
+    function generateMaze() {
+      initializeGrid();
+      for (let y = 1; y < GRID_HEIGHT - 1; y++) {
+        for (let x = 1; x < GRID_WIDTH - 1; x++) {
+          grid[y][x] = Math.random() < 0.35 ? 1 : 0;
+        }
+      }
+      carvePath(player.x, player.y, key.x, key.y);
+      carvePath(key.x, key.y, chest.x, chest.y);
+      addRandomBranches();
+      grid[player.y][player.x] = 0;
+      grid[key.y][key.x] = 0;
+      grid[chest.y][chest.x] = 0;
+    }
+
+    function carvePath(startX, startY, endX, endY) {
+      let x = startX, y = startY;
+      while (x !== endX || y !== endY) {
+        if (x < endX) x++;
+        else if (x > endX) x--;
+        else if (y < endY) y++;
+        else if (y > endY) y--;
+        grid[y][x] = 0;
+      }
+    }
+
+    function addRandomBranches() {
+      for (let i = 0; i < 5; i++) {
+        let x = Math.floor(Math.random() * (GRID_WIDTH - 2)) + 1;
+        let y = Math.floor(Math.random() * (GRID_HEIGHT - 2)) + 1;
+        if (grid[y][x] === 0) {
+          let dir = Math.floor(Math.random() * 4);
+          let dx = [0, 0, -1, 1][dir];
+          let dy = [-1, 1, 0, 0][dir];
+          if (x + dx > 0 && x + dx < GRID_WIDTH - 1 && y + dy > 0 && y + dy < GRID_HEIGHT - 1) {
+            grid[y + dy][x + dx] = 0;
+          }
+        }
+      }
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Background color based on Sol
+      ctx.fillStyle = player.character === "sol" ? "#8B0000" : "#000"; // Dark red when Sol is equipped
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      
+      for (let y = 0; y < GRID_HEIGHT; y++) {
+        for (let x = 0; x < GRID_WIDTH; x++) {
+          if (grid[y][x] === 1) {
+            ctx.fillStyle = "#555";
+            ctx.fillRect(x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+          }
+        }
+      }
+      const char = shopItems.find(item => item.name.toLowerCase() === player.character);
+      if (char.type === "square") {
+        ctx.fillStyle = char.color;
+        ctx.fillRect(player.x * TILE_SIZE, player.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      } else if (char.type === "flash") {
+        ctx.fillStyle = flashVisible ? char.color : "#fff";
+        ctx.fillRect(player.x * TILE_SIZE, player.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      } else if (char.type === "skull") {
+        ctx.fillStyle = char.color;
+        ctx.fillRect(player.x * TILE_SIZE + 2, player.y * TILE_SIZE + 2, TILE_SIZE - 4, TILE_SIZE - 4);
+        ctx.fillStyle = "#000";
+        ctx.fillRect(player.x * TILE_SIZE + 4, player.y * TILE_SIZE + 4, 2, 2);
+        ctx.fillRect(player.x * TILE_SIZE + TILE_SIZE - 6, player.y * TILE_SIZE + 4, 2, 2);
+        if (skullEyesVisible) {
+          ctx.fillStyle = "#f00";
+          ctx.fillRect(player.x * TILE_SIZE + 4, player.y * TILE_SIZE + 4, 2, 2);
+          ctx.fillRect(player.x * TILE_SIZE + TILE_SIZE - 6, player.y * TILE_SIZE + 4, 2, 2);
+        }
+        ctx.fillStyle = "#000";
+        ctx.fillRect(player.x * TILE_SIZE + 4, player.y * TILE_SIZE + TILE_SIZE - 6, 1, 4);
+        ctx.fillRect(player.x * TILE_SIZE + 6, player.y * TILE_SIZE + TILE_SIZE - 6, 1, 4);
+        ctx.fillRect(player.x * TILE_SIZE + TILE_SIZE - 8, player.y * TILE_SIZE + TILE_SIZE - 6, 1, 4);
+        ctx.fillRect(player.x * TILE_SIZE + TILE_SIZE - 6, player.y * TILE_SIZE + TILE_SIZE - 6, 1, 4);
+      } else if (char.type === "star") {
+        drawStar(player.x * TILE_SIZE + TILE_SIZE / 2, player.y * TILE_SIZE + TILE_SIZE / 2, TILE_SIZE / 2);
+      } else if (char.type === "sun") {
+        drawSun(player.x * TILE_SIZE + TILE_SIZE / 2, player.y * TILE_SIZE + TILE_SIZE / 2, TILE_SIZE / 2);
+      }
+      if (!player.hasKey) {
+        ctx.fillStyle = "#ff0";
+        ctx.globalAlpha = 0.7 + Math.sin(Date.now() / 200) * 0.3;
+        ctx.beginPath();
+        ctx.moveTo(key.x * TILE_SIZE + TILE_SIZE / 2, key.y * TILE_SIZE + 2);
+        ctx.lineTo(key.x * TILE_SIZE + 2, key.y * TILE_SIZE + TILE_SIZE - 2);
+        ctx.lineTo(key.x * TILE_SIZE + TILE_SIZE - 2, key.y * TILE_SIZE + TILE_SIZE - 2);
+        ctx.fill();
+        ctx.globalAlpha = 1.0;
+      }
+      ctx.fillStyle = chest.isOpen ? "#ffd700" : (chest.isLightBlue ? "#87ceeb" : chest.isPurple ? "#800080" : "#8b4513");
+      ctx.fillRect(chest.x * TILE_SIZE, chest.y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      ctx.fillStyle = "#000";
+      ctx.fillRect(chest.x * TILE_SIZE, chest.y * TILE_SIZE + TILE_SIZE / 2 - 1, TILE_SIZE, 2);
+      ctx.fillStyle = "#ff0";
+      ctx.beginPath();
+      ctx.arc(chest.x * TILE_SIZE + TILE_SIZE / 2, chest.y * TILE_SIZE + TILE_SIZE / 2, TILE_SIZE / 4, Math.PI, 0);
+      ctx.fill();
+
+      ctx.fillStyle = "#fff";
+      ctx.font = "12px monospace";
+      ctx.fillText(`Coins: ${player.coins.toFixed(1)} Key: ${player.hasKey ? "Acquired" : "Not Found"}`, 10, 315);
+      ctx.fillText(chest.isOpen ? "Chest Open!" : "Find the key!", 220, 315);
+
+      if (coinAnimation.alpha > 0) {
+        ctx.fillStyle = `rgba(255, 255, 0, ${coinAnimation.alpha})`;
+        ctx.font = "16px monospace";
+        ctx.fillText(coinAnimation.text, coinAnimation.x, coinAnimation.y);
+        coinAnimation.y -= 0.5;
+        coinAnimation.alpha -= 0.02;
+        coinAnimation.timer--;
+        if (coinAnimation.timer <= 0) coinAnimation.alpha = 0;
+      }
+
+      rotationAngle += 0.05;
+      flashVisible = Math.floor(Date.now() / 200) % 2 === 0;
+      skullEyesVisible = Math.floor(Date.now() / 500) % 2 === 0;
+    }
+
+    function drawStar(x, y, size) { // Renamed from drawRainbowStar
+      const colors = ["#f00", "#ff0", "#0f0", "#00f", "#f0f", "#ffa500", "#00ffff", "#ff00ff"];
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotationAngle);
+      ctx.beginPath();
+      for (let i = 0; i < 5; i++) {
+        ctx.lineTo(size * Math.cos((18 + i * 72) * Math.PI / 180), size * Math.sin((18 + i * 72) * Math.PI / 180));
+        ctx.lineTo(size * 0.5 * Math.cos((54 + i * 72) * Math.PI / 180), size * 0.5 * Math.sin((54 + i * 72) * Math.PI / 180));
+      }
+      ctx.closePath();
+      ctx.fillStyle = colors[Math.floor(Math.random() * colors.length)];
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawSun(x, y, size) {
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(rotationAngle);
+      ctx.beginPath();
+      ctx.arc(0, 0, size * 0.5, 0, Math.PI * 2);
+      ctx.fillStyle = "#ff0";
+      ctx.fill();
+      ctx.fillStyle = "#ff0";
+      for (let i = 0; i < 8; i++) {
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(size * Math.cos(i * Math.PI / 4), size * Math.sin(i * Math.PI / 4));
+        ctx.lineTo(size * 0.7 * Math.cos((i + 0.5) * Math.PI / 4), size * 0.7 * Math.sin((i + 0.5) * Math.PI / 4));
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function movePlayer(dx, dy) {
+      const newX = player.x + dx;
+      const newY = player.y + dy;
+      // Allow Sol to pass through walls, others must check grid
+      if (newX >= 0 && newX < GRID_WIDTH && newY >= 0 && newY < GRID_HEIGHT) {
+        if (player.character === "sol" || grid[newY][newX] === 0) {
+          player.x = newX;
+          player.y = newY;
+          playMoveSound();
+          checkKey();
+          checkChest();
+        }
+      }
+      draw();
+    }
+
+    function checkKey() {
+      if (player.x === key.x && player.y === key.y && !player.hasKey) {
+        player.hasKey = true;
+      }
+    }
+
+    function checkChest() {
+      if (player.x === chest.x && player.y === chest.y && !chest.isOpen) {
+        if (player.hasKey) {
+          player.coins += chest.coinReward;
+          chest.isOpen = true;
+          playChestSound();
+          coinAnimation.text = `+${chest.coinReward.toFixed(1)}`;
+          coinAnimation.x = chest.x * TILE_SIZE + TILE_SIZE / 2 - 10;
+          coinAnimation.y = chest.y * TILE_SIZE - 5;
+          coinAnimation.alpha = 1;
+          coinAnimation.timer = 60;
+          setTimeout(resetGame, 1000);
+        } else {
+          alert("You need the key to open the chest!");
+        }
+      }
+    }
+
+    function resetGame() {
+      player.x = 1;
+      player.y = 1;
+      player.hasKey = false;
+      key.x = Math.floor(Math.random() * (GRID_WIDTH - 2)) + 1;
+      key.y = Math.floor(Math.random() * (GRID_HEIGHT - 2)) + 1;
+      chest.x = Math.floor(Math.random() * (GRID_WIDTH - 2)) + 1;
+      chest.y = Math.floor(Math.random() * (GRID_HEIGHT - 2)) + 1;
+      chest.isOpen = false;
+      chest.isLightBlue = Math.random() < 0.02;
+      chest.isPurple = !chest.isLightBlue && Math.random() < 0.05;
+      chest.coinReward = chest.isLightBlue ? 99.9 : chest.isPurple ? 10 : 1;
+      generateMaze();
+      draw();
+      updateShop();
+    }
+
+    function updateShop() {
+      const shop = document.getElementById("shop");
+      shop.innerHTML = "";
+      shopItems.forEach(item => {
+        const div = document.createElement("div");
+        const name = item.name.toLowerCase();
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "name";
+        nameSpan.textContent = item.name;
+        const priceSpan = document.createElement("span");
+        priceSpan.className = "price";
+        priceSpan.textContent = item.cost;
+        div.appendChild(nameSpan);
+        div.appendChild(priceSpan);
+        if (ownedCharacters.includes(name)) {
+          div.classList.add("owned");
+          if (player.character === name) div.classList.add("selected");
+        }
+        div.addEventListener("click", () => selectOrBuyItem(item));
+        div.addEventListener("touchstart", (e) => { e.preventDefault(); selectOrBuyItem(item); });
+        shop.appendChild(div);
+      });
+    }
+
+    function selectOrBuyItem(item) {
+      const name = item.name.toLowerCase();
+      if (ownedCharacters.includes(name)) {
+        player.character = name;
+      } else if (player.coins >= item.cost) {
+        player.coins -= item.cost;
+        ownedCharacters.push(name);
+        player.character = name;
+      } else {
+        alert("Not enough coins!");
+      }
+      updateShop();
+      draw();
+    }
+
+    document.addEventListener("keydown", (event) => {
+      switch (event.key) {
+        case "ArrowUp": movePlayer(0, -1); break;
+        case "ArrowDown": movePlayer(0, 1); break;
+        case "ArrowLeft": movePlayer(-1, 0); break;
+        case "ArrowRight": movePlayer(1, 0); break;
+      }
+    });
+
+    const buttons = {
+      up: document.getElementById("up"),
+      down: document.getElementById("down"),
+      left: document.getElementById("left"),
+      right: document.getElementById("right")
+    };
+    buttons.up.addEventListener("touchstart", () => movePlayer(0, -1));
+    buttons.down.addEventListener("touchstart", () => movePlayer(0, 1));
+    buttons.left.addEventListener("touchstart", () => movePlayer(-1, 0));
+    buttons.right.addEventListener("touchstart", () => movePlayer(1, 0));
+    Object.values(buttons).forEach(button => {
+      button.addEventListener("touchstart", (e) => e.preventDefault());
+    });
+
+    generateMaze();
+    draw();
+    updateShop();
+
+    function animate() {
+      draw();
+      requestAnimationFrame(animate);
+    }
+    animate();
+  </script>
+</body>
+</html>
